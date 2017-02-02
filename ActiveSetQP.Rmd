@@ -1,0 +1,204 @@
+---
+title: "Active-Set Method for Convex QP"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4 
+---
+
+# Definition of QP problem
+
+First an object is needed that defines the QP problem with all it's constraints. Note that _I_ is just a logical vector denoting whether the constraint is an inequality (_TRUE_) or equality (_FALSE_) constraint.
+
+```{r}
+setClass('QP',
+         slots = c(H='matrix', c='numeric', A='matrix', b='numeric', I='logical'), 
+         validity = function(object){TRUE})
+
+setMethod("initialize",
+          'QP',
+          function(.Object, H, c, A, b, I, ...){
+            .Object <- callNextMethod()
+            .Object@H = H
+            .Object@c = c
+            .Object@A = A
+            .Object@b = b
+            .Object@I = I
+            .Object
+          })
+QP <- function(H, c, A = matrix(), b = vector('numeric'), I = vector()){
+  QP <- new('QP', H = H, c = c, A = A, b = b, I = I)
+  QP
+}
+```
+
+# Active-Set Method for Convex QP
+
+_ActiveSet_ object as defined here is a closure. It is based on Active-Set Method for Convex QP as described in Nocedal, J. e.a., _Numerical Optimization_, 2ed, 2006, p.472. Example of how to use is further down.
+
+Note two things here.
+
+1. Solution of step $p_k$ is not exact, so some tolerance is needed under which components of $p_k$ are considered 0. That is the _pTol_ argument. 
+2. Then there is the solution of the KKT matrix. In case it is positive semi-definite, then the R base _solve()_ function can not be used. So the Moore-Penrose generalized inverse is used from _MASS_ package. _svd()_ from R base could probably also be used.
+
+```{r}
+ActiveSet <- function(QP, H = QP@H, c = QP@c, A = QP@A, b = QP@b, I = QP@I, 
+                      x0, writeLog = FALSE, pTol = 1e-10){
+  
+  # Private members
+  a <- vector('list')
+  W <- vector('list')
+  x <- vector('list')
+  p <- vector('list')
+  kCurrent <- 0
+  xFinal <- NULL
+  
+  # Private functions
+  pLog <- function(string){
+    if (writeLog) print(string)
+  } 
+  
+  activeConstraints <- function(xk){
+    which(A %*% xk - b == 0)  
+  }
+  
+  g <- function(xk){
+    H %*% xk + c
+  }
+  
+  K <- function(H, A, AtMultiplier = 1){
+    top <- cbind(H, AtMultiplier * t(A))
+    bottom <- cbind(A, array(0, dim = c(nrow(A), ncol(top) - ncol(A))))
+    rbind(top, bottom)
+  }
+  
+  solveKKT <- function(K, c, b){
+    sol <- MASS::ginv(K) %*% c(-c, b) # Moore-Penrose generalized inverse
+    structure(sol[1:length(c)], lambdas = sol[-(1:length(c))])
+  }
+  
+  solvepk <- function(xk, Wk){
+    solveKKT(K = K(H = H, A = A[Wk,,drop=FALSE]), 
+             c = g(xk = xk), 
+             b = rep(0, length(Wk)))
+  }
+  
+  pk0LagrangeMultipliers <- function(xk, Wk){
+    qr.solve(t(A[Wk,,drop=FALSE]), g(xk = xk)) 
+  }
+  
+  pk0FoundX <- function(multipliers, Wk){
+    # If all multipliers >= 0 for ONLY inequality constraints, 
+    # then that is the solution
+    all(multipliers[I[Wk]] >= 0)
+  }
+  
+  pk0InequalityToRemove <- function(multipliers, Wk){
+    # Inequality constraint that is causing trouble.
+    Imultipliers <- multipliers[I[Wk]]
+    IWk <- Wk[I[Wk]]
+    IWk[which.min(Imultipliers)]
+  }
+  
+  pk0Iteration <- function(k){
+    L <- pk0LagrangeMultipliers(xk = x[[k]], Wk = W[[k]])
+    if (pk0FoundX(multipliers = L, Wk = W[[k]])) {
+      pLog(paste('x* found after', kCurrent, 'steps!'))
+      xFinal <<- x[[k]]
+      return(x[[k]])
+    } else {
+      W[[k+1]] <<- setdiff(W[[k]], pk0InequalityToRemove(L, Wk = W[[k]]))
+      x[[k+1]] <<- x[[k]]
+    }
+  }  
+  
+  pkNNComputeAk <- function(xk, pk, Wk){
+    Imin <- intersect(setdiff(1:length(I), Wk), which(A %*% pk < 0))
+    minSet <- (b[Imin] - A[Imin,,drop=FALSE] %*% xk) /
+              (A[Imin, , drop=FALSE] %*% pk)
+    structure(min(1, minSet), 'blockingSet' = Imin[minSet < 1])
+  }
+  
+  pkNNIteration <- function(k){
+    a[[k]] <<- pkNNComputeAk(xk = x[[k]], pk = p[[k]], Wk = W[[k]])
+    x[[k+1]] <<- x[[k]] + a[[k]] * as.vector(p[[k]])
+    if (length(attr(a[[k]], 'blockingSet') > 0)) {
+      W[[k+1]] <<- union(W[[k]], attr(a[[k]], 'blockingSet')[1])
+    } else {
+      W[[k+1]] <<- W[[k]]
+    }
+  }
+  
+  iterate <- function(k){
+    p[[k]] <<- solvepk(xk = x[[k]], Wk = W[[k]])
+    # Problem here is numerical precision to assume pk == 0
+    if (all(abs(p[[k]]) < pTol)){ # if pk == 0
+      pk0Iteration(k)
+    } else { # pk != 0
+      pkNNIteration(k)
+    }
+  }
+  
+  nextIteration <- function(){ 
+    iterate(k = kCurrent + 1)
+    kCurrent <<- kCurrent + 1
+  }
+  
+  iterateTillFound <- function(){
+    while (is.null(xFinal)){
+      nextIteration()
+    }
+    return(xFinal)
+  }
+  
+  # Initialize
+  x[[1]] <- x0
+  W[[1]] <- activeConstraints(x[[1]])
+  
+  # public functions
+  list(nextIteration = nextIteration,
+       solve = iterateTillFound,
+       getWorkingSetW = function(){W},
+       getStepP = function(){p},
+       getStepLengthAlpha = function(){a},
+       getPointsX = function(){x})
+}
+```
+
+# Examples
+
+## Example 16.2 from Nocedal (p.452-3)
+
+```{r}
+QPeEb <- QP(H = matrix(c(6,2,1,2,5,2,1,2,4), ncol = 3),
+            c = -c(8,3,3),
+            A = matrix(c(1,0,0,1,1,1), ncol = 3),
+            b = c(3,0),
+            I = c(FALSE, FALSE))
+QPeEb
+```
+
+```{r}
+ActiveSet(QP = QPeEb, x0 = c(3,0,0), writeLog = TRUE)$solve()
+```
+
+
+## Example 16.2 from Nocedal (p.475-6)
+
+```{r}
+QPeIb <- QP(H = diag(2, 2), 
+            c = c(-2,-5),
+            A = matrix(data = c(+1, -2,
+                                -1, -2,
+                                -1, +2,
+                                +1, +0,
+                                +0, +1), ncol = 2, byrow = TRUE),
+            b = c(-2, -6, -2, 0, 0),
+            I = c(TRUE, TRUE, TRUE, TRUE, TRUE))
+QPeIb
+```
+
+```{r}
+ActiveSet(QP = QPeIb, x0 = c(2,0), writeLog = TRUE)$solve()
+```
+
