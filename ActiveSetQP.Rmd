@@ -59,7 +59,15 @@ ActiveSet <- function(QP, H = QP@H, c = QP@c, A = QP@A, b = QP@b, I = QP@I,
   } 
   
   activeConstraints <- function(xk){
-    which(A %*% xk - b == 0)  
+    # Due to numerical issues, it might be that an equality constraint
+    # for xk does not add up to exactly 0 in A %*% xk - b. That is 
+    # why some tolerance is used.
+    acIndexes <- which(abs(A %*% xk - b) <= sqrt(.Machine$double.eps))
+    # All equality constraints must be in working set (always)
+    # Since equality constrains are never removed, it is enough
+    # assert that they are in the working set at the start.
+    stopifnot(which(!I) %in% acIndexes) 
+    return(acIndexes)
   }
   
   g <- function(xk){

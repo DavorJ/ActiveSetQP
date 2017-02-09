@@ -179,7 +179,15 @@ setMethod(&quot;initialize&quot;,
   } 
   
   activeConstraints &lt;- function(xk){
-    which(A %*% xk - b == 0)  
+    # Due to numerical issues, it might be that an equality constraint
+    # for xk does not add up to exactly 0 in A %*% xk - b. That is 
+    # why some tolerance is used.
+    acIndexes &lt;- which(abs(A %*% xk - b) &lt;= sqrt(.Machine$double.eps))
+    # All equality constraints must be in working set (always)
+    # Since equality constrains are never removed, it is enough
+    # assert that they are in the working set at the start.
+    stopifnot(which(!I) %in% acIndexes) 
+    return(acIndexes)
   }
   
   g &lt;- function(xk){
