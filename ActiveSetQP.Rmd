@@ -122,15 +122,23 @@ ActiveSet <- function(QP, H = QP@H, c = QP@c, A = QP@A, b = QP@b, I = QP@I,
   
   pkNNComputeAk <- function(xk, pk, Wk){
     Imin <- intersect(setdiff(1:length(I), Wk), which(A %*% pk < 0))
-    minSet <- (b[Imin] - A[Imin,,drop=FALSE] %*% xk) /
+    alphas <- (b[Imin] - A[Imin,,drop=FALSE] %*% xk) /
               (A[Imin, , drop=FALSE] %*% pk)
-    structure(min(1, minSet), 'blockingSet' = Imin[minSet < 1])
+    # We order the blocking sets according to the least alpha first.
+    structure(min(1, alphas), 
+              'blockingSet' = Imin[alphas < 1][order(alphas[alphas < 1], 
+                                                     decreasing = FALSE)])
   }
   
   pkNNIteration <- function(k){
     a[[k]] <<- pkNNComputeAk(xk = x[[k]], pk = p[[k]], Wk = W[[k]])
     x[[k+1]] <<- x[[k]] + a[[k]] * as.vector(p[[k]])
     if (length(attr(a[[k]], 'blockingSet') > 0)) {
+      # We take the blocking constrant of the lowest alpha. This is - unlike
+      # what Nocedal (p472) says - necessary since x_k+1 now satisfies
+      # the constraint of the lowest alpha and not any other. Chosing the 
+      # wrong constraint might end up with wrong p_k+1 = 0 since the 
+      # wrong constraint is not satisfied by x_k+1!!!
       W[[k+1]] <<- union(W[[k]], attr(a[[k]], 'blockingSet')[1])
     } else {
       W[[k+1]] <<- W[[k]]
