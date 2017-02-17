@@ -66,7 +66,9 @@ ActiveSet <- function(QP, H = QP@H, c = QP@c, A = QP@A, b = QP@b, I = QP@I,
     # All equality constraints must be in working set (always)
     # Since equality constrains are never removed, it is enough
     # assert that they are in the working set at the start.
-    stopifnot(which(!I) %in% acIndexes) 
+    if (!all(I) && !all(which(!I) %in% acIndexes)) {
+      stop("min$ActiveSet: Not all equality constraints active!")
+    }
     return(acIndexes)
   }
   

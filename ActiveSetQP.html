@@ -186,7 +186,9 @@ setMethod(&quot;initialize&quot;,
     # All equality constraints must be in working set (always)
     # Since equality constrains are never removed, it is enough
     # assert that they are in the working set at the start.
-    stopifnot(which(!I) %in% acIndexes) 
+    if (!all(I) &amp;&amp; !all(which(!I) %in% acIndexes)) {
+      stop(&quot;min$ActiveSet: Not all equality constraints active!&quot;)
+    }
     return(acIndexes)
   }
   
